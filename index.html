@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Multi-Doctor Token Display (Batched)</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@700&family=Roboto:wght@700&display=swap" rel="stylesheet">
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #AAB0B9;
+      font-family: 'Roboto', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overflow: hidden;
+    }
+
+    /* Wrapper fills viewport and clips overflow */
+    #stage-wrapper {
+      position: fixed;
+      inset: 0;
+      display: block;
+      overflow: hidden;
+      background: linear-gradient(180deg, #AAB0B9 0%, #CED5DB 100%);
+    }
+
+    /* Design stage uses 1920x1080 coordinate system */
+    #stage {
+      width: 1920px;
+      height: 1080px;
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform-origin: center center;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+      overflow: hidden;
+      background: transparent;
+    }
+
+    .tile {
+      position: absolute;
+      border: 2px solid #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      overflow: hidden;
+      box-sizing: border-box;
+      color: #1E1E1E;
+    }
+
+    .doctor-name {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+      padding: 4px 8px;
+    }
+
+    .room {
+      font-size: 26px;
+      margin-top: 6px;
+      font-weight: 700;
+    }
+
+    .token-label {
+      font-size: 20px;
+      margin-top: 6px;
+    }
+
+    .token-number {
+      font-size: 72px;
+      color: #1E1E1E;
+      font-family: 'Inter', sans-serif;
+      font-weight: 700;
+      line-height: 0.9;
+      margin-top: 6px;
+    }
+
+    .flicker {
+      animation: flickerAnimation 3s ease-in-out;
+    }
+
+    @keyframes flickerAnimation {
+      0%, 20%, 40%, 60%, 80%, 100% { opacity: 1; }
+      10%, 30%, 50%, 70%, 90% { opacity: 0; }
+    }
+
+    /* Tiles (W480 x H270) with exact positions */
+    #tile1 { left: 0px; top: 0px; width: 480px; height: 270px; }
+    #tile2 { left: 0px; top: 270px; width: 480px; height: 270px; }
+    #tile3 { left: 0px; top: 540px; width: 480px; height: 270px; }
+    #tile4 { left: 0px; top: 810px; width: 480px; height: 270px; }
+    #tile5 { left: 480px; top: 810px; width: 480px; height: 270px; }
+    #tile6 { left: 960px; top: 810px; width: 480px; height: 270px; }
+    #tile7 { left: 1440px; top: 810px; width: 480px; height: 270px; }
+
+    /* Video area (W1440 x H810) */
+    #videoContainer {
+      position: absolute;
+      left: 480px;
+      top: 0px;
+      width: 1440px;
+      height: 810px;
+      overflow: hidden;
+      background: black;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #videoContainer video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    /* layout text truncation */
+    .doctor-name, .room, .token-label, .token-number {
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage-wrapper" aria-hidden="false">
+    <div id="stage" aria-label="Token dashboard stage">
+      <!-- Video area -->
+      <div id="videoContainer" role="region" aria-label="Information video">
+        <video autoplay loop muted playsinline>
+          <!-- replace the source below with your actual video file path -->
+          <source src="assets/AIIMSDermat 3 Language.mp4" type="video/mp4">
+          Your browser does not support the video tag.
+        </video>
+      </div>
+
+      <!-- Seven Tiles -->
+      <div id="tile1" class="tile" role="region" aria-label="Tile 1"></div>
+      <div id="tile2" class="tile" role="region" aria-label="Tile 2"></div>
+      <div id="tile3" class="tile" role="region" aria-label="Tile 3"></div>
+      <div id="tile4" class="tile" role="region" aria-label="Tile 4"></div>
+      <div id="tile5" class="tile" role="region" aria-label="Tile 5"></div>
+      <div id="tile6" class="tile" role="region" aria-label="Tile 6"></div>
+      <div id="tile7" class="tile" role="region" aria-label="Tile 7"></div>
+    </div>
+  </div>
+
+  <script>
+    (function setupStageScaler() {
+      const stage = document.getElementById('stage');
+
+      function applyScale() {
+        const winW = window.innerWidth;
+        const winH = window.innerHeight;
+        const designW = 1920;
+        const designH = 1080;
+
+        // COVER: scale such that stage fills viewport (may crop)
+        const scale = Math.max(winW / designW, winH / designH);
+
+        stage.style.transform = `translate(-50%, -50%) scale(${scale})`;
+      }
+
+      let rafId = null;
+      function onResize() {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+          applyScale();
+          rafId = null;
+        });
+      }
+
+      window.addEventListener('resize', onResize);
+      window.addEventListener('orientationchange', onResize);
+      applyScale();
+    })();
+
+    // ---------------------------
+    // Supabase + batched display logic
+    // ---------------------------
+    document.addEventListener('DOMContentLoaded', async () => {
+      const { createClient } = supabase;
+      const supabaseUrl = 'https://swseqntztxeqguvuhrmo.supabase.co';
+      const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3c2VxbnR6dHhlcWd1dnVocm1vIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ5ODYyNDAsImV4cCI6MjA2MDU2MjI0MH0.EsMdhQaGxr8VIQeW4hCF11zFYWRfA8nAButBj_F-_U8';
+      const supabaseClient = createClient(supabaseUrl, supabaseKey);
+
+      // --- Tile doctor groups (3 per tile as requested)
+      const tileDoctors = [
+        ["Dr. Swapnil S"],
+        ["Dr. Harshanand P"],
+        ["Dr. Rohit G"],
+        ["Dr. Ashis Y"],
+        ["Dr. Shalu A"],
+        ["Dr. Sakshi Gawande"],
+        ["Dr. Hrishikesh Das", "Dr. Induja"]
+      ];
+    const doctorRooms = {
+  "Dr. Swapnil S": "106",
+  "Dr. Harshanand P": "108",
+  "Dr. Rohit G": "108",
+  "Dr. Ashis Y": "113",
+  "Dr. Shalu A": "112",
+  "Dr. Sakshi Gawande": "108",
+  "Dr. Hrishikesh Das": "112",
+  "Dr. Induja": "113"
+};
+
+
+      // Flatten the doctor list for batch query
+      const allDoctors = tileDoctors.flat();
+
+      // assign alternating background colors
+      const tileColors = ["#E8B069", "#69AEE8"];
+      for (let i = 1; i <= 7; i++) {
+        const el = document.getElementById(`tile${i}`);
+        el.style.background = tileColors[(i - 1) % 2];
+        el.innerHTML = `
+  <div class="room" id="room-${i}" style="font-size:48px; font-weight:700;"></div>
+  <div class="token-label" id="token-label-${i}" style="font-size:32px; margin-top:10px;"></div>
+  <div class="token-number" id="token-${i}" style="font-size:150px; margin-top:0px;"></div>
+`;
+
+      }
+
+      // Per-tile state
+      const tileState = Array.from({length:7}).map((_, idx) => ({
+        doctors: tileDoctors[idx],
+        currentIndex: 0,           // which of the 3 doctors is currently shown
+        isHindi: true,             // language toggle - start with Hindi on new doctor
+        langTimer: null,           // 5s toggle
+        doctorTimer: null,         // 10s rotate
+      }));
+
+      // Last known token numbers map: doctorName -> token number
+      const lastTokenNumbers = {};
+      // Latest fetched tokens map: doctorName -> { "ROOM NO", "TOKEN NUMBER", "CREATED AT" }
+      let latestTokens = {};
+
+      // helper: convert digits to Hindi (Devanagari)
+      function toHindiDigits(number) {
+        if (number === null || number === undefined) return '';
+        const s = String(number);
+        const hindiDigits = ['०','१','२','३','४','५','६','७','८','९'];
+        return s.split('').map(ch => {
+          if (ch >= '0' && ch <= '9') return hindiDigits[+ch];
+          return ch;
+        }).join('');
+      }
+      function getAvailableDoctorsForTile(tileIdx) {
+      return tileState[tileIdx].doctors.filter(d => latestTokens[d]);
+        }
+
+      // Render a single tile based on state
+      function renderTile(tileIdx) {
+        const state = tileState[tileIdx];
+        const doctorName = state.doctors[state.currentIndex];
+        const tokenData = latestTokens[doctorName] || null;
+
+        // DOM elements
+      
+        const roomEl = document.getElementById(`room-${tileIdx+1}`);
+        const tokenLabelEl = document.getElementById(`token-label-${tileIdx+1}`);
+        const tokenEl = document.getElementById(`token-${tileIdx+1}`);
+
+        // set doctor name
+        
+
+        if (!tokenData) {
+          roomEl.textContent = '';
+          tokenLabelEl.textContent = '';
+          tokenEl.textContent = '';
+          return;
+        }
+
+        const room = doctorRooms[doctorName] || tokenData["ROOM NO"];
+        const token = tokenData["TOKEN NUMBER"];
+
+        if (state.isHindi) {
+          roomEl.textContent = `रूम : ${toHindiDigits(room)}`;
+          tokenLabelEl.textContent = 'टोकन';
+          tokenEl.textContent = toHindiDigits(token);
+        } else {
+          roomEl.textContent = `ROOM : ${room}`;
+          tokenLabelEl.textContent = 'TOKEN';
+          tokenEl.textContent = token;
+        }
+      }
+
+      // Start/Reset per-tile language and doctor rotation timers
+      function startLangTimer(tileIdx, tokenData) {
+        const state = tileState[tileIdx];
+
+        if (state.langTimer) clearInterval(state.langTimer);
+        // Always start with Hindi
+        state.isHindi = true;
+        renderTile(tileIdx);
+
+        state.langTimer = setInterval(() => {
+          state.isHindi = !state.isHindi;
+          renderTile(tileIdx);
+        }, 5000);
+      }
+
+      function startDoctorTimer(tileIdx) {
+  const state = tileState[tileIdx];
+
+  if (state.doctorTimer) clearInterval(state.doctorTimer);
+
+  function rotate() {
+    const available = getAvailableDoctorsForTile(tileIdx);
+
+    if (available.length === 0) {
+      // nothing to show
+      return;
+    }
+
+    if (available.length === 1) {
+      // always show only doctor[0]
+      state.currentIndex = tileState[tileIdx].doctors.indexOf(available[0]);
+      renderTile(tileIdx);
+      return;
+    }
+
+    // rotate among available doctors
+    const currentDoc = tileState[tileIdx].doctors[state.currentIndex];
+    let nextIdx = available.indexOf(currentDoc);
+
+    nextIdx = (nextIdx + 1) % available.length;
+
+    const nextDoc = available[nextIdx];
+    state.currentIndex = tileState[tileIdx].doctors.indexOf(nextDoc);
+
+    // restart Hindi-English toggle on doctor change
+    startLangTimer(tileIdx);
+    renderTile(tileIdx);
+  }
+
+  // First call immediately
+  rotate();
+
+  // then every 10 sec
+  state.doctorTimer = setInterval(rotate, 10000);
+}
+
+
+      // When a new token arrives for a doctor, make its tile show that doctor immediately
+      function handleNewTokenForDoctor(doctorName, tokenValue) {
+        // find tile(s) containing this doctor (only one tile per mapping)
+        for (let i = 0; i < tileState.length; i++) {
+          const idx = tileState[i].doctors.indexOf(doctorName);
+          if (idx !== -1) {
+            // detect change for flicker
+            const last = lastTokenNumbers[doctorName];
+            if (last !== undefined && last !== tokenValue) {
+              // flicker effect on the token DOM
+              const tokenEl = document.getElementById(`token-${i+1}`);
+              if (tokenEl) {
+                tokenEl.classList.remove('flicker');
+                void tokenEl.offsetWidth; // reflow to restart animation
+                tokenEl.classList.add('flicker');
+              }
+            }
+            // update last token
+            lastTokenNumbers[doctorName] = tokenValue;
+
+            // set tile to show this doctor now
+            tileState[i].currentIndex = idx;
+
+            // reset timers for this tile (start language with Hindi and restart doctor rotation)
+            startLangTimer(i);
+            startDoctorTimer(i);
+
+            // render tile (will display latestTokens[doctorName])
+            renderTile(i);
+            break; // a doctor appears in only one tile mapping
+          }
+        }
+      }
+
+      // BATCH FETCH: fetch latest rows for all doctors in one request
+      // We will pull all rows for those doctors and pick the newest per doctor (max CREATED AT)
+      async function fetchAllDoctorsLatest() {
+        try {
+          // Use .in to fetch only relevant doctors
+          const { data, error } = await supabaseClient
+            .from('running_token_details')
+            .select('"DOCTOR NAME","ROOM NO","TOKEN NUMBER","CREATED AT"')
+            .in('DOCTOR NAME', allDoctors);
+
+          if (error) {
+            console.error('Batch fetch error:', error);
+            return;
+          }
+
+          // Build a map doctor -> latest row (by CREATED AT)
+          const map = {};
+          (data || []).forEach(row => {
+            const name = row["DOCTOR NAME"];
+            const created = row["CREATED AT"] ? new Date(row["CREATED AT"]).getTime() : 0;
+            if (!map[name] || created > (map[name].createdAt || 0)) {
+              map[name] = {
+                "ROOM NO": row["ROOM NO"],
+                "TOKEN NUMBER": row["TOKEN NUMBER"],
+                "CREATED AT": row["CREATED AT"],
+                createdAt: created
+              };
+            }
+          });
+
+          // Compare with previous latestTokens and detect new tokens
+          for (const name of allDoctors) {
+            const newRow = map[name];
+            const oldRow = latestTokens[name];
+            const newToken = newRow ? newRow["TOKEN NUMBER"] : null;
+            const oldToken = oldRow ? oldRow["TOKEN NUMBER"] : null;
+
+            // update latestTokens map
+            if (newRow) latestTokens[name] = newRow;
+            else delete latestTokens[name];
+
+            // if token changed (and previously existed), trigger tile update/flicker behavior
+            if (newToken !== null && oldToken !== undefined && newToken !== oldToken) {
+              handleNewTokenForDoctor(name, newToken);
+            }
+
+            // if first time we've seen this doctor (no oldToken), just set lastTokenNumbers so subsequent changes fire flicker
+            if (oldToken === undefined && newToken !== null) {
+              lastTokenNumbers[name] = newToken;
+            }
+          }
+
+          // Note: This function intentionally does not force a full redraw of all tiles every fetch.
+          // It only triggers tile updates when a token changes or when initial load occurs.
+        } catch (err) {
+          console.error("fetchAllDoctorsLatest unexpected error:", err);
+        }
+      }
+
+      // INITIALIZATION: start timers for each tile, set initial display
+      // First fetch, then initialize timers and initial renders
+      await fetchAllDoctorsLatest();
+
+      // For initial render: if tile has any doctor with data, show the first available in that tile
+      for (let i = 0; i < tileState.length; i++) {
+        // find first doctor in this tile with data
+        const doctors = tileState[i].doctors;
+       const available = getAvailableDoctorsForTile(i);
+if (available.length > 0) {
+  tileState[i].currentIndex = tileState[i].doctors.indexOf(available[0]);
+} else {
+  tileState[i].currentIndex = 0; // blank tile
+}
+
+        // start timers
+        startLangTimer(i);
+        startDoctorTimer(i);
+        // initial render
+        renderTile(i);
+      }
+
+      // POLLING LOOP: batch fetch every 2 seconds
+      setInterval(fetchAllDoctorsLatest, 2000);
+
+      // ALSO: To ensure tiles update periodically (for language rotation), we already started langTimer and doctorTimer per tile.
+      // If you want a global fallback to refresh every 10s, you could also call fetchAllDoctorsLatest on those timers, but batch polling covers it.
+
+    }); // end DOMContentLoaded
+  </script>
+</body>
+</html>
